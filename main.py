@@ -8,7 +8,33 @@ import zipfile
 import io
 import xml.etree.ElementTree as ET
 import pandas as pd
-from typing import Optional, Dict, List  # 이 줄을 추가하세요!
+import duckdb
+from typing import Optional, Dict, List
+
+# ==========================================
+# 0. Database 초기화
+# ==========================================
+DB_PATH = "financial_data.duckdb"
+
+def init_db():
+    conn = duckdb.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cached_financials (
+            corp_code VARCHAR,
+            year INTEGER,
+            quarter INTEGER,
+            report_code VARCHAR,
+            fs_div VARCHAR,
+            account_id VARCHAR,
+            account_nm VARCHAR,
+            thstrm_amount BIGINT,
+            PRIMARY KEY (corp_code, year, report_code, fs_div, account_id)
+        )
+    """)
+    conn.close()
+
+# 앱 시작 시 DB 초기화
+init_db()
 
 # ==========================================
 # 1. DART 고유번호(Corp Code) 관리 함수
@@ -128,6 +154,68 @@ def get_financial_data(api_key: str, corp_code: str, year: int, report_type: str
         traceback.print_exc()
         return None
 
+def get_financial_data_from_db(corp_code: str, year: int, report_code: str, fs_div: str) -> Optional[pd.DataFrame]:
+    """DB에서 재무 데이터를 조회합니다."""
+    try:
+        conn = duckdb.connect(DB_PATH)
+        query = """
+            SELECT account_id, account_nm, thstrm_amount 
+            FROM cached_financials 
+            WHERE corp_code = ? AND year = ? AND report_code = ? AND fs_div = ?
+        """
+        df = conn.execute(query, [str(corp_code), int(year), str(report_code), str(fs_div)]).df()
+        conn.close()
+        
+        if not df.empty:
+            return df
+        return None
+    except Exception as e:
+        print(f"⚠️ DB 조회 중 오류: {e}")
+        return None
+
+def save_financial_data_to_db(df: pd.DataFrame, corp_code: str, year: int, quarter: int, report_code: str, fs_div: str):
+    """API에서 가져온 데이터를 DB에 저장(Upsert)합니다."""
+    if df is None or df.empty:
+        return
+
+    try:
+        conn = duckdb.connect(DB_PATH)
+        
+        # 저장할 주요 항목만 필터링 (매출액, 영업이익)
+        key_items = ['ifrs-full_Revenue', 'dart_OperatingIncomeLoss']
+        target_df = df[df['account_id'].isin(key_items)].copy()
+        
+        if target_df.empty:
+            conn.close()
+            return
+            
+        # 데이터 준비
+        data_to_insert = []
+        for _, row in target_df.iterrows():
+            data_to_insert.append((
+                str(corp_code),
+                int(year),
+                int(quarter),
+                str(report_code),
+                str(fs_div),
+                row['account_id'],
+                row['account_nm'],
+                int(row['thstrm_amount']) if pd.notna(row['thstrm_amount']) else 0
+            ))
+            
+        # Upsert 실행
+        conn.executemany("""
+            INSERT OR REPLACE INTO cached_financials 
+            (corp_code, year, quarter, report_code, fs_div, account_id, account_nm, thstrm_amount)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, data_to_insert)
+        
+        conn.close()
+        # print(f"  💾 DB 저장 완료 ({year}년 {quarter}분기)")
+        
+    except Exception as e:
+        print(f"⚠️ DB 저장 실패: {e}")
+
 def get_quarter_info(year_month: int) -> tuple:
     """
     YYYYMM 형식의 입력을 받아 해당 분기 정보를 반환합니다.
@@ -246,103 +334,162 @@ def collect_quarterly_financials(api_key: str, corp_code: str, year: int, year_m
         print(f"\n🔄 [{year_month if year_month else year} 기준/년] {corp_code} 재무데이터 수집 시작 (병렬 처리)...")
         
         
+        
         # requests.Session()을 사용하여 연결 재사용
         with requests.Session() as session:
             
-            # [최적화] 사용할 재무제표 종류(연결/별도) 결정
-            # 최신 분기부터 탐색하여 연결(CFS)이 있으면 연결만, 없으면 별도(OFS)만 수집하도록 함
-            determined_fs_divs = fs_divs # 기본값은 둘 다 시도
+            # [최적화 1단계] DB에서 데이터 조회 시도
+            # 캐싱된 데이터가 있는지 먼저 확인하고, 없으면 API 호출 대상 리스트(missing_tasks)를 만듭니다.
+            missing_tasks = []
             
-            print("🧐 재무제표 종류(연결/별도) 확인 중...")
+            # 탐색할 분기 리스트 (최신 -> 과거 순으로 정렬되어 있지는 않음, 필요시 정렬)
+            # 여기서는 편의상 quarters_to_collect 순서대로 확인
             
-            # 탐색할 분기 리스트 뒤집기 (최신 -> 과거)
-            for target_year, target_quarter in reversed(quarters_to_collect):
-                # 해당 분기의 보고서 코드 찾기
-                if target_quarter == 1: report_code = '11013'
-                elif target_quarter == 2: report_code = '11012'
-                elif target_quarter == 3: report_code = '11014'
-                else: report_code = '11011'
-                
-                # 1. 연결 확인
-                cfs_df = get_financial_data(api_key, corp_code, target_year, report_code, 'CFS', session)
-                if cfs_df is not None:
-                    determined_fs_divs = [('연결', 'CFS')]
-                    print(f"  👉 연결(CFS) 재무제표 확인됨 ({target_year}년 {target_quarter}분기). 이후 요청은 '연결'만 수행합니다.")
-                    break
-                
-                # 2. 별도 확인 (연결이 없는 경우에만)
-                ofs_df = get_financial_data(api_key, corp_code, target_year, report_code, 'OFS', session)
-                if ofs_df is not None:
-                    determined_fs_divs = [('별도', 'OFS')]
-                    print(f"  👉 별도(OFS) 재무제표 확인됨 ({target_year}년 {target_quarter}분기). 이후 요청은 '별도'만 수행합니다.")
-                    break
+            # [최적화 2단계] 사용할 재무제표 종류(연결/별도) 결정 (API 호출이 필요한 경우에만)
+            # 만약 DB에 데이터가 하나도 없다면, Probing을 통해 연결/별도를 결정해야 함.
+            determined_fs_divs = fs_divs 
             
-            if len(determined_fs_divs) == 2:
-                 print("  ⚠️ 재무제표 종류를 확정하지 못했습니다. (데이터 없음). 모든 종류를 시도합니다.")
+            # 1. DB 조회 및 데이터 수집
+            for target_year, target_quarter in quarters_to_collect:
+                 if target_quarter == 1: report_code = '11013'; report_name = '1분기보고서'
+                 elif target_quarter == 2: report_code = '11012'; report_name = '반기보고서'
+                 elif target_quarter == 3: report_code = '11014'; report_name = '3분기보고서'
+                 else: report_code = '11011'; report_name = '사업보고서'
 
-            # 병렬 처리를 위한 작업 목록 생성 (결정된 fs_divs 사용)
-            tasks = []
-            
-            if year_month is not None:
-                 for target_year, target_quarter in quarters_to_collect:
-                    if target_quarter == 1:
-                        report_name = '1분기보고서'
-                        report_code = '11013'
-                    elif target_quarter == 2:
-                        report_name = '반기보고서'
-                        report_code = '11012'
-                    elif target_quarter == 3:
-                        report_name = '3분기보고서'
-                        report_code = '11014'
-                    else:  # target_quarter == 4
-                        report_name = '사업보고서'
-                        report_code = '11011'
+                 # 연결/별도/둘다 시도 (determined_fs_divs 기준이 아니라, 일단 캐시된게 있는지 확인)
+                 # 하지만 캐시된 데이터가 "어떤 fs_div"인지 알아야 하므로, 
+                 # 전략:
+                 # - 일단 확정된 determined_fs_divs 가 있다면 그것만 조회.
+                 # - 아직 확정되지 않았다면(초기 상태), 연결->별도 순으로 DB 조회 시도.
+                 
+                 found_in_db = False
+                 
+                 # 만약 fs_div가 확정되지 않았다면, 연결->별도 순으로 DB를 찔러봄
+                 current_check_divs = determined_fs_divs
+                 
+                 for fs_name, fs_code in current_check_divs:
+                     db_df = get_financial_data_from_db(corp_code, target_year, report_code, fs_code)
+                     if db_df is not None:
+                         db_df['보고서명'] = report_name
+                         db_df['구분'] = fs_name
+                         db_df['년도'] = target_year
+                         db_df['분기'] = target_quarter
+                         all_data.append(db_df)
+                         print(f"  ✅ {target_year}년 {target_quarter}분기 ({fs_name}) - DB(Cache)에서 로드됨")
+                         
+                         found_in_db = True
+                         # 캐시에서 '연결'을 찾았다면, 앞으로는 '연결'만 찾으면 됨
+                         if fs_code == 'CFS' and len(determined_fs_divs) > 1:
+                             determined_fs_divs = [('연결', 'CFS')]
+                         # 캐시에서 '별도'를 찾았고 연결이 없었다면? (이건 확신할 수 없음. 연결 데이터가 누락된 걸수도)
+                         # 하지만 통상적으로 최근 데이터가 별도라면 별도 기업일 확률 높음.
+                         # 보수적으로: 캐시된게 있으면 그걸 씀.
+                         break
+                 
+                 if not found_in_db:
+                     # DB에 없으면 API 호출 목록에 추가
+                     missing_tasks.append((target_year, target_quarter, report_code, report_name))
 
-                    # 결정된 fs_divs 만 루프
+            # 2. API 호출 (DB에 없는 데이터만)
+            if missing_tasks:
+                print(f"  ⬇️ {len(missing_tasks)}건의 데이터가 DB에 없어 API에서 조회합니다...")
+                
+                # [Probing] 만약 아직 fs_div가 확정되지 않았다면(여전히 2개라면),
+                # missing_tasks 중 가장 최신 분기를 골라 Probing을 한다.
+                if len(determined_fs_divs) > 1:
+                    # missing_tasks는 (year, quarter, ...) 튜플 리스트.
+                    # 정렬: year 내림차순 -> quarter 내림차순
+                    sorted_missing = sorted(missing_tasks, key=lambda x: (x[0], x[1]), reverse=True)
+                    
+                    print("  🧐 재무제표 종류(연결/별도) 확인 중 (API)...")
+                    for t_year, t_quarter, t_report_code, _ in sorted_missing:
+                        # 1. 연결 확인
+                        cfs_df = get_financial_data(api_key, corp_code, t_year, t_report_code, 'CFS', session)
+                        if cfs_df is not None:
+                            determined_fs_divs = [('연결', 'CFS')]
+                            # 가져온 김에 저장 및 사용
+                            save_financial_data_to_db(cfs_df, corp_code, t_year, t_quarter, t_report_code, 'CFS')
+                            break # 루프 종료 (확정됨) 
+                        
+                        # 2. 별도 확인
+                        ofs_df = get_financial_data(api_key, corp_code, t_year, t_report_code, 'OFS', session)
+                        if ofs_df is not None:
+                            determined_fs_divs = [('별도', 'OFS')]
+                            # 가져온 김에 저장 및 사용
+                            save_financial_data_to_db(ofs_df, corp_code, t_year, t_quarter, t_report_code, 'OFS')
+                            break # 루프 종료
+
+                    if len(determined_fs_divs) == 2:
+                        print("  ⚠️ 재무제표 종류를 확정하지 못했습니다. 모든 종류를 시도합니다.")
+
+                # 3. 확정된 determined_fs_divs 로 나머지 API 병렬 호출 준비
+                api_tasks = []
+                for t_year, t_quarter, t_report_code, t_report_name in missing_tasks:
+                    # 이미 Probing 단계에서 데이터를 가져왔는데 또 가져오지 않도록 체크해야 함.
+                    # (간단하게 구현: Probing에서 가져온 데이터도 다시 가져오더라도 덮어쓰므로 문제는 없지만 비효율적)
+                    # -> Probing 때 DB에 저장했으므로, 다시 get_financial_data_from_db 로 확인하면 될까? 
+                    # 아니면 그냥 Probing 때 저장만 하고, 여기서 다시 태스크로 넣어서 처리?
+                    # -> Probing 때 save_financial_data_to_db 했음.
+                    # -> DB를 다시 조회해서 있으면 스킵하는 게 깔끔함.
+                    
+                    found_after_probing = False
                     for fs_name, fs_code in determined_fs_divs:
-                        tasks.append({
-                            'year': target_year,
-                            'report_code': report_code,
+                        # Probing 직후 DB 확인
+                        db_df_check = get_financial_data_from_db(corp_code, t_year, t_report_code, fs_code)
+                        if db_df_check is not None:
+                             db_df_check['보고서명'] = t_report_name
+                             db_df_check['구분'] = fs_name
+                             db_df_check['년도'] = t_year
+                             db_df_check['분기'] = t_quarter
+                             all_data.append(db_df_check)
+                             # print(f"  ✅ {t_year}년 {t_quarter}분기 ({fs_name}) - Probing 중 수집됨")
+                             found_after_probing = True
+                             break
+                    
+                    if found_after_probing:
+                        continue
+
+                    # 여전히 없으면 API 태스크 추가
+                    for fs_name, fs_code in determined_fs_divs:
+                        api_tasks.append({
+                            'year': t_year,
+                            'report_code': t_report_code,
                             'fs_code': fs_code,
-                            'report_name': report_name,
+                            'report_name': t_report_name,
                             'fs_name': fs_name,
-                            'quarter': target_quarter
+                            'quarter': t_quarter
                         })
-            else:
-                # 기존 연도 처리 (여기에도 적용 가능하지만, 현재 요청은 search 위주이므로 year_month 로직만 수정해도 무방. 
-                # 하지만 일관성을 위해 여기도 적용)
-                for report_name, report_code in report_types:
-                    for fs_name, fs_code in determined_fs_divs:
-                        tasks.append({
-                            'year': year,
-                            'report_code': report_code,
-                            'fs_code': fs_code,
-                            'report_name': report_name,
-                            'fs_name': fs_name
-                        })
-            # ThreadPoolExecutor를 사용하여 병렬 실행 (max_workers 증가)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-                future_to_task = {
-                    executor.submit(get_financial_data, api_key, corp_code, t['year'], t['report_code'], t['fs_code'], session): t 
-                    for t in tasks
-                }
-                
-                for future in concurrent.futures.as_completed(future_to_task):
-                    task = future_to_task[future]
-                    try:
-                        df = future.result()
-                        if df is not None:
-                            df['보고서명'] = task['report_name']
-                            df['구분'] = task['fs_name']
-                            df['년도'] = task['year']
-                            if 'quarter' in task:
-                                df['분기'] = task['quarter']
-                            all_data.append(df)
-                            print(f"  ✅ {task['year']}년 {task['report_name']} ({task['fs_name']})")
-                        else:
-                            print(f"  ❌ {task['year']}년 {task['report_name']} ({task['fs_name']}) - 데이터 없음")
-                    except Exception as exc:
-                        print(f"  💥 {task['year']}년 {task['report_name']} 요청 실패: {exc}")
+
+                # 병렬 실행
+                if api_tasks:
+                     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                        future_to_task = {
+                            executor.submit(get_financial_data, api_key, corp_code, t['year'], t['report_code'], t['fs_code'], session): t 
+                            for t in api_tasks
+                        }
+                        
+                        for future in concurrent.futures.as_completed(future_to_task):
+                            task = future_to_task[future]
+                            try:
+                                df = future.result()
+                                if df is not None:
+                                    # DB에 저장
+                                    save_financial_data_to_db(df, corp_code, task['year'], task['quarter'], task['report_code'], task['fs_code'])
+                                    
+                                    # 결과 리스트 절약 (메모리상) -> DB에서 읽는 형태를 취하거나, 그냥 df 사용
+                                    # 여기서는 df 직접 사용
+                                    df['보고서명'] = task['report_name']
+                                    df['구분'] = task['fs_name']
+                                    df['년도'] = task['year']
+                                    if 'quarter' in task:
+                                        df['분기'] = task['quarter']
+                                    all_data.append(df)
+                                    print(f"  ✅ {task['year']}년 {task['report_name']} ({task['fs_name']}) - API 조회 및 DB 저장")
+                                else:
+                                    print(f"  ❌ {task['year']}년 {task['report_name']} ({task['fs_name']}) - 데이터 없음")
+                            except Exception as exc:
+                                print(f"  💥 {task['year']}년 {task['report_name']} 요청 실패: {exc}")
+
 
     if not all_data:
         return pd.DataFrame()

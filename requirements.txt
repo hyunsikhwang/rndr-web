@@ -3,4 +3,4 @@ uvicorn
 requests
 pandas
 openpyxl
-python-dotenv
+python-dotenvduckdb
