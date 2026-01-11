@@ -534,7 +534,7 @@ def home():
             <h2>DART 재무정보 조회 (FastAPI)</h2>
             <form action="/search" method="get">
                 회사명: <input type="text" name="company_name">
-                연도(YYYYMM): <input type="text" name="year_month" placeholder="202412">
+                연도(YYYYMM): <input type="text" name="year_month" placeholder="202509">
                 <input type="submit" value="조회하기">
             </form>
         </body>
