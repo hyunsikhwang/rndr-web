@@ -103,6 +103,7 @@ def get_financial_data(api_key: str, corp_code: str, year: int, report_type: str
     print(url, params)
     try:
         res = requests.get(url, params=params, timeout=10)
+        print(res)
         data = res.json()
         
         if data['status'] == '000' and data.get('list'):
