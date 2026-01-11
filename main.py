@@ -245,47 +245,81 @@ def collect_quarterly_financials(api_key: str, corp_code: str, year: int, year_m
 
         print(f"\n🔄 [{year_month if year_month else year} 기준/년] {corp_code} 재무데이터 수집 시작 (병렬 처리)...")
         
-        # 병렬 처리를 위한 작업 목록 생성
-        tasks = []
         
-        if year_month is not None:
-             for target_year, target_quarter in quarters_to_collect:
-                if target_quarter == 1:
-                    report_name = '1분기보고서'
-                    report_code = '11013'
-                elif target_quarter == 2:
-                    report_name = '반기보고서'
-                    report_code = '11012'
-                elif target_quarter == 3:
-                    report_name = '3분기보고서'
-                    report_code = '11014'
-                else:  # target_quarter == 4
-                    report_name = '사업보고서'
-                    report_code = '11011'
-
-                for fs_name, fs_code in fs_divs:
-                    tasks.append({
-                        'year': target_year,
-                        'report_code': report_code,
-                        'fs_code': fs_code,
-                        'report_name': report_name,
-                        'fs_name': fs_name,
-                        'quarter': target_quarter
-                    })
-        else:
-            # 기존 연도 처리
-            for report_name, report_code in report_types:
-                for fs_name, fs_code in fs_divs:
-                    tasks.append({
-                        'year': year,
-                        'report_code': report_code,
-                        'fs_code': fs_code,
-                        'report_name': report_name,
-                        'fs_name': fs_name
-                    })
-
         # requests.Session()을 사용하여 연결 재사용
         with requests.Session() as session:
+            
+            # [최적화] 사용할 재무제표 종류(연결/별도) 결정
+            # 최신 분기부터 탐색하여 연결(CFS)이 있으면 연결만, 없으면 별도(OFS)만 수집하도록 함
+            determined_fs_divs = fs_divs # 기본값은 둘 다 시도
+            
+            print("🧐 재무제표 종류(연결/별도) 확인 중...")
+            
+            # 탐색할 분기 리스트 뒤집기 (최신 -> 과거)
+            for target_year, target_quarter in reversed(quarters_to_collect):
+                # 해당 분기의 보고서 코드 찾기
+                if target_quarter == 1: report_code = '11013'
+                elif target_quarter == 2: report_code = '11012'
+                elif target_quarter == 3: report_code = '11014'
+                else: report_code = '11011'
+                
+                # 1. 연결 확인
+                cfs_df = get_financial_data(api_key, corp_code, target_year, report_code, 'CFS', session)
+                if cfs_df is not None:
+                    determined_fs_divs = [('연결', 'CFS')]
+                    print(f"  👉 연결(CFS) 재무제표 확인됨 ({target_year}년 {target_quarter}분기). 이후 요청은 '연결'만 수행합니다.")
+                    break
+                
+                # 2. 별도 확인 (연결이 없는 경우에만)
+                ofs_df = get_financial_data(api_key, corp_code, target_year, report_code, 'OFS', session)
+                if ofs_df is not None:
+                    determined_fs_divs = [('별도', 'OFS')]
+                    print(f"  👉 별도(OFS) 재무제표 확인됨 ({target_year}년 {target_quarter}분기). 이후 요청은 '별도'만 수행합니다.")
+                    break
+            
+            if len(determined_fs_divs) == 2:
+                 print("  ⚠️ 재무제표 종류를 확정하지 못했습니다. (데이터 없음). 모든 종류를 시도합니다.")
+
+            # 병렬 처리를 위한 작업 목록 생성 (결정된 fs_divs 사용)
+            tasks = []
+            
+            if year_month is not None:
+                 for target_year, target_quarter in quarters_to_collect:
+                    if target_quarter == 1:
+                        report_name = '1분기보고서'
+                        report_code = '11013'
+                    elif target_quarter == 2:
+                        report_name = '반기보고서'
+                        report_code = '11012'
+                    elif target_quarter == 3:
+                        report_name = '3분기보고서'
+                        report_code = '11014'
+                    else:  # target_quarter == 4
+                        report_name = '사업보고서'
+                        report_code = '11011'
+
+                    # 결정된 fs_divs 만 루프
+                    for fs_name, fs_code in determined_fs_divs:
+                        tasks.append({
+                            'year': target_year,
+                            'report_code': report_code,
+                            'fs_code': fs_code,
+                            'report_name': report_name,
+                            'fs_name': fs_name,
+                            'quarter': target_quarter
+                        })
+            else:
+                # 기존 연도 처리 (여기에도 적용 가능하지만, 현재 요청은 search 위주이므로 year_month 로직만 수정해도 무방. 
+                # 하지만 일관성을 위해 여기도 적용)
+                for report_name, report_code in report_types:
+                    for fs_name, fs_code in determined_fs_divs:
+                        tasks.append({
+                            'year': year,
+                            'report_code': report_code,
+                            'fs_code': fs_code,
+                            'report_name': report_name,
+                            'fs_name': fs_name
+                        })
             # ThreadPoolExecutor를 사용하여 병렬 실행 (max_workers 증가)
             with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
                 future_to_task = {
