@@ -103,6 +103,7 @@ def get_financial_data(api_key: str, corp_code: str, year: int, report_type: str
     try:
         res = requests.get(url, params=params, timeout=10)
         data = res.json()
+        print(url, params)
         
         if data['status'] == '000' and data.get('list'):
             df = pd.DataFrame(data['list'])
@@ -535,7 +536,7 @@ def home():
     """
 
 @app.get("/search")
-def search(company_name: str, year_month: int = 202412):
+def search(company_name: str, year_month: int = 202509):
     if not MY_API_KEY:
         return {"error": "DART_API_KEY가 설정되지 않았습니다."}
 
