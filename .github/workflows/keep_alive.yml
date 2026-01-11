@@ -18,8 +18,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Keepalive Workflow
-        uses: gautamkrishnar/keepalive-workflow@v1
-        with:
-          committer_username: github-actions[bot]
-          committer_email: github-actions[bot]@users.noreply.github.com
+      - name: Auto-commit to keep workflow active
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "keep-alive: prevent workflow suspension"
+          git push
