@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 import os
 import pandas as pd
+from typing import Optional, Dict, List  # 이 줄을 추가하세요!
 
 # ==========================================
 # 1. DART 고유번호(Corp Code) 관리 함수
