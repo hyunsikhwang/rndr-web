@@ -1,6 +1,10 @@
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 import os
+import requests
+import zipfile
+import io
+import xml.etree.ElementTree as ET
 import pandas as pd
 from typing import Optional, Dict, List  # 이 줄을 추가하세요!
 
@@ -115,7 +119,10 @@ def get_financial_data(api_key: str, corp_code: str, year: int, report_type: str
             return df
         else:
             return None
-    except Exception:
+    except Exception as e:
+        print(f"❌ API 호출 중 오류 발생: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def get_quarter_info(year_month: int) -> tuple:
