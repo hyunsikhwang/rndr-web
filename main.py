@@ -364,62 +364,23 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
         unique_years_quarters = sorted(df[['년도', '분기']].drop_duplicates().values.tolist(),
                                      key=lambda x: (x[0], x[1]), reverse=False)
 
-        # 헤더 및 테이블 생성
-        lines = []
-        lines.append(" " * 25 + "📋 [재무 정보 요약 테이블]")
-        lines.append("=" * 80)
-
-        # 헤더 생성 (동적 컬럼 수)
-        header_parts = ['기간']
-        for item in ['매출액', '영업이익', '영업이익률']:
-            header_parts.append(item)
-        header_parts.append('단위')
-
-        header = " | ".join([f"{header_parts[0]:<12}" if i == 0 else
-                             f"{col:>12}" if i == len(header_parts)-1 else
-                             f"{col:>10}" for i, col in enumerate(header_parts)])
-        lines.append(header)
-        lines.append("-" * 80)
-
-        # 데이터 행 생성
-        for year, quarter in unique_years_quarters:
-            period_name = f"{year}년 {quarter}분기"
-            row_parts = [f"{period_name:<12}"]
-
-            # 매출액
-            rev = pivot_df.loc[(year, quarter), '매출액'] if (year, quarter) in pivot_df.index and '매출액' in pivot_df.columns else None
-            if pd.isna(rev) or rev is None:
-                row_parts.append("-")
-            elif rev == 0:
-                row_parts.append("0")
-            else:
-                row_parts.append(f"{int(rev):,}")
-
-            # 영업이익
-            op = pivot_df.loc[(year, quarter), '영업이익'] if (year, quarter) in pivot_df.index and '영업이익' in pivot_df.columns else None
-            if pd.isna(op) or op is None:
-                row_parts.append("-")
-            elif op == 0:
-                row_parts.append("0")
-            else:
-                row_parts.append(f"{int(op):,}")
-
-            # 영업이익률 계산
-            if pd.notna(rev) and pd.notna(op) and rev != 0:
-                margin = (op / rev) * 100
-                row_parts.append(f"{margin:.2f}")
-            else:
-                row_parts.append("-")
-
-            row_parts.append("원")
-            row_str = " | ".join([f"{row_parts[0]:<12}" if i == 0 else
-                                 f"{val:>12}" if i == len(row_parts)-1 else
-                                 f"{val:>10}" for i, val in enumerate(row_parts)])
-            lines.append(row_str)
-
-        lines.append("=" * 80)
-
-        return "\n".join(lines)
+        return f"""
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    {"".join(f"<th>{col}</th>" for col in header_parts)}
+                </tr>
+            </thead>
+            <tbody>
+                {"".join(
+                    f"<tr>{''.join(f'<td class=\"number\">{val}</td>' if i > 0 and val != '-' and col_name != '단위' else f'<td>{val}</td>' for i, (col_name, val) in enumerate(zip(header_parts, row_data)))}</tr>"
+                    for row_data in rows
+                )}
+            </tbody>
+        </table>
+    </div>
+    """
 
     else:
         # 기존 연도별 표시 (변경 없음)
@@ -456,95 +417,161 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
 
         formatted_df = pivot_df.map(format_cell)
 
-        lines = []
-        lines.append(" " * 25 + "📋 [재무 정보 요약 테이블]")
-        lines.append("=" * 80)
-
         # 컬럼명에 연월 정보 추가
-        # 보고서별로 연월 정보를 추출하여 컬럼명에 추가
         report_columns = {}
         for report in report_order:
             report_data = df[df['보고서명'] == report]
             if not report_data.empty:
-                # 가장 최근 연도를 사용
                 latest_year = report_data['년도'].max()
-                # 보고서 유형에 따라 월 결정
-                if report == '사업보고서':
-                    month = 12
-                elif report == '1분기보고서':
-                    month = 3
-                elif report == '반기보고서':
-                    month = 6
-                elif report == '3분기보고서':
-                    month = 9
-                else:
-                    month = 12
-                # 컬럼명을 연월(YYYYMM) 기준으로만 표시
+                if report == '사업보고서': month = 12
+                elif report == '1분기보고서': month = 3
+                elif report == '반기보고서': month = 6
+                elif report == '3분기보고서': month = 9
+                else: month = 12
                 report_columns[report] = f"{latest_year}{month:02d}"
             else:
                 report_columns[report] = report
 
-        # 과거->최신 순으로 컬럼 순서 재배치
-        # 연월(YYYYMM) 기준으로 정렬
         sorted_columns = sorted(report_columns.items(), key=lambda x: int(x[1]))
 
         # 헤더 생성
-        header_parts = ['항목']
-        for report, col_name in sorted_columns:
-            header_parts.append(col_name)
-        header_parts.append('단위')
-
-        header = " | ".join([f"{header_parts[0]:<12}" if i == 0 else
-                             f"{col:>12}" if i == len(header_parts)-1 else
-                             f"{col:>10}" for i, col in enumerate(header_parts)])
-        lines.append(header)
-        lines.append("-" * 80)
+        header_parts = ['항목'] + [col_name for _, col_name in sorted_columns] + ['단위']
 
         # 데이터 행 생성
+        rows = []
         for item in formatted_df.index:
-            row_parts = [f"{item:<12}"]
             row = formatted_df.loc[item]
-
-            for report, col_name in sorted_columns:
+            row_vals = [item]
+            for report, _ in sorted_columns:
                 val = row.get(report, None)
-                if pd.isna(val) or val is None:
-                    row_parts.append("-")
-                elif val == 0:
-                    row_parts.append("0")
-                else:
-                    row_parts.append(f"{int(str(val).replace(',', '')):,}")
+                if pd.isna(val) or val is None: row_vals.append("-")
+                elif val == 0: row_vals.append("0")
+                else: row_vals.append(f"{int(str(val).replace(',', '')):,}")
+            row_vals.append("원")
+            rows.append(row_vals)
 
-            row_parts.append("원")
-            row_str = " | ".join([f"{row_parts[0]:<12}" if i == 0 else
-                                 f"{val:>12}" if i == len(row_parts)-1 else
-                                 f"{val:>10}" for i, val in enumerate(row_parts)])
-            lines.append(row_str)
-
-        lines.append("-" * 80)
-
-        # 영업이익률 행 추가 (분기별 계산)
-        margin_parts = ['영업이익률']
-        for report, col_name in sorted_columns:
+        # 영업이익률 행 추가
+        margin_vals = ['영업이익률']
+        for report, _ in sorted_columns:
             try:
                 rev = pivot_df.loc['매출액', report]
                 op = pivot_df.loc['영업이익', report]
                 if pd.notna(rev) and pd.notna(op) and rev != 0:
                     margin = (op / rev) * 100
-                    margin_parts.append(f"{margin:.2f}")
+                    margin_vals.append(f"{margin:.2f}")
                 else:
-                    margin_parts.append("-")
+                    margin_vals.append("-")
             except KeyError:
-                margin_parts.append("-")
+                margin_vals.append("-")
+        margin_vals.append("%")
+        rows.append(margin_vals)
 
-        margin_parts.append("%")
-        margin_str = " | ".join([f"{margin_parts[0]:<12}" if i == 0 else
-                                f"{val:>12}" if i == len(margin_parts)-1 else
-                                f"{val:>10}" for i, val in enumerate(margin_parts)])
-        lines.append(margin_str)
+        return f"""
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        {"".join(f"<th>{col}</th>" for col in header_parts)}
+                    </tr>
+                </thead>
+                <tbody>
+                    {"".join(
+                        f"<tr>{''.join(f'<td class=\"number\">{val}</td>' if i > 0 and val != '-' and col_name != '단위' else f'<td>{val}</td>' for i, (col_name, val) in enumerate(zip(header_parts, row_data)))}</tr>"
+                        for row_data in rows
+                    )}
+                </tbody>
+            </table>
+        </div>
+        """
 
-        lines.append("=" * 80)
-
-        return "\n".join(lines)
+def render_page(content: str) -> str:
+    return f"""
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>DART 재무정보 검색</title>
+        <style>
+            :root {{
+                --primary: #2563eb;
+                --surface: #ffffff;
+                --background: #f8fafc;
+                --text: #1e293b;
+                --border: #e2e8f0;
+            }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                background-color: var(--background);
+                color: var(--text);
+                margin: 0;
+                padding: 20px;
+                line-height: 1.5;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                min-height: 100vh;
+            }}
+            .container {{
+                width: 100%;
+                max-width: 800px;
+                background: var(--surface);
+                padding: 2rem;
+                border-radius: 16px;
+                box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            }}
+            h1, h2 {{ text-align: center; margin-bottom: 2rem; color: var(--text); }}
+            .search-form {{ display: flex; flex-direction: column; gap: 1rem; margin-bottom: 2rem; }}
+            input[type="text"] {{
+                width: 100%; padding: 12px 16px; border: 1px solid var(--border);
+                border-radius: 8px; font-size: 16px; box-sizing: border-box;
+            }}
+            input[type="text"]:focus {{ outline: none; border-color: var(--primary); }}
+            input[type="submit"], .btn {{
+                background-color: var(--primary); color: white; border: none;
+                padding: 14px; border-radius: 8px; font-size: 16px; font-weight: 600;
+                cursor: pointer; width: 100%; text-align: center; text-decoration: none;
+                display: inline-block; box-sizing: border-box;
+            }}
+            .btn-secondary {{ background-color: #64748b; margin-top: 1rem; }}
+            /* Table */
+            .table-container {{ overflow-x: auto; margin-top: 1rem; border-radius: 8px; border: 1px solid var(--border); }}
+            table {{ width: 100%; border-collapse: collapse; font-size: 14px; white-space: nowrap; }}
+            th, td {{ padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }}
+            th {{ background-color: #f1f5f9; font-weight: 600; }}
+            td.number {{ text-align: right; font-family: "SF Mono", monospace; }}
+            /* Loading */
+            .overlay {{
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(255, 255, 255, 0.9); display: none;
+                justify-content: center; align-items: center; z-index: 1000; flex-direction: column;
+            }}
+            .spinner {{
+                width: 40px; height: 40px; border: 4px solid #e2e8f0;
+                border-top-color: var(--primary); border-radius: 50%;
+                animation: spin 1s linear infinite; margin-bottom: 1rem;
+            }}
+            @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+            .badge {{
+                display: inline-block; padding: 4px 12px; border-radius: 9999px;
+                background-color: #e0f2fe; color: #0369a1; font-size: 12px; font-weight: 500; margin-top: 1rem;
+            }}
+        </style>
+        <script>
+            function showLoading() {{ document.getElementById('loading-overlay').style.display = 'flex'; }}
+        </script>
+    </head>
+    <body>
+        <div class="overlay" id="loading-overlay">
+            <div class="spinner"></div>
+            <div>데이터 조회 중...</div>
+        </div>
+        <div class="container">
+            {content}
+        </div>
+    </body>
+    </html>
+    """
 
 
 app = FastAPI()
@@ -554,43 +581,46 @@ MY_API_KEY = os.getenv("DART_API_KEY")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return """
-    <html>
-        <body>
-            <h2>DART 재무정보 조회 (FastAPI)</h2>
-            <form action="/search" method="get">
-                회사명: <input type="text" name="company_name">
-                연도(YYYYMM): <input type="text" name="year_month" placeholder="202509">
-                <input type="submit" value="조회하기">
-            </form>
-        </body>
-    </html>
+    content = """
+        <h2>DART 재무정보 조회</h2>
+        <form action="/search" method="get" class="search-form" onsubmit="showLoading()">
+            <label>회사명</label>
+            <input type="text" name="company_name" placeholder="예: 삼성전자" required>
+            <label>기준 연도(YYYYMM)</label>
+            <input type="text" name="year_month" placeholder="예: 202509" value="202509">
+            <input type="submit" value="조회하기">
+        </form>
     """
+    return render_page(content)
 
-@app.get("/search")
+@app.get("/search", response_class=HTMLResponse)
 def search(company_name: str, year_month: int = 202509):
-    start_time = time.time()  # 시작 시간 측정
+    start_time = time.time()
 
     if not MY_API_KEY:
-        return {"error": "DART_API_KEY가 설정되지 않았습니다."}
+        return render_page(f"<h3>⚠️ 오류</h3><p>DART_API_KEY가 설정되지 않았습니다.</p><a href='/' class='btn btn-secondary'>돌아가기</a>")
 
-    # 1. 회사 코드 검색
     corp_code = search_company_code(MY_API_KEY, company_name)
     if not corp_code:
-        return {"error": f"'{company_name}' 회사를 찾을 수 없습니다."}
+        return render_page(f"<h3>❌ 검색 실패</h3><p>'{company_name}' 회사를 찾을 수 없습니다.</p><a href='/' class='btn btn-secondary'>돌아가기</a>")
 
-    # 2. 재무데이터 수집 (기존 로직 사용)
     target_year = year_month // 100
     df = collect_quarterly_financials(MY_API_KEY, corp_code, target_year, year_month)
 
     if df.empty:
-        return {"error": "데이터를 찾을 수 없습니다."}
+        return render_page(f"<h3>❌ 데이터 없음</h3><p>재무 데이터를 찾을 수 없습니다.</p><a href='/' class='btn btn-secondary'>돌아가기</a>")
 
-    # 3. 테이블 변환 및 출력
     summary_table = format_display_table(df, corp_code, year_month)
     
-    end_time = time.time()  # 종료 시간 측정
+    end_time = time.time()
     elapsed_time = end_time - start_time
     
-    # 웹 브라우저에서 보기 좋게 <pre> 태그로 감싸서 반환
-    return HTMLResponse(content=f"<h3>{company_name} 검색 결과</h3><pre>{summary_table}</pre><p>⏱️ 처리 시간: {elapsed_time:.2f}초</p>")
+    content = f"""
+        <h2>'{company_name}' 검색 결과</h2>
+        {summary_table}
+        <div style="text-align: center; margin-top: 1rem;">
+            <span class="badge">⏱️ 처리 시간: {elapsed_time:.2f}초</span>
+        </div>
+        <a href="/" class="btn btn-secondary">다시 검색하기</a>
+    """
+    return render_page(content)
