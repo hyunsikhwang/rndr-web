@@ -93,7 +93,7 @@ def search_company_code(api_key: str, company_name: str) -> Optional[str]:
 # 2. 재무제표 데이터 수집 함수
 # ==========================================
 
-def get_financial_data(api_key: str, corp_code: str, year: int, report_type: str, fs_div: str) -> Optional[pd.DataFrame]:
+def get_financial_data(api_key: str, corp_code: str, year: int, report_type: str, fs_div: str, session: requests.Session = None) -> Optional[pd.DataFrame]:
     """
     특정 조건(년도, 보고서타입, 구분)의 재무제표 데이터를 가져옵니다.
     """
@@ -107,7 +107,10 @@ def get_financial_data(api_key: str, corp_code: str, year: int, report_type: str
     }
     
     try:
-        res = requests.get(url, params=params, timeout=10)
+        if session:
+            res = session.get(url, params=params, timeout=10)
+        else:
+            res = requests.get(url, params=params, timeout=10)
         data = res.json()
         
         if data['status'] == '000' and data.get('list'):
@@ -281,29 +284,31 @@ def collect_quarterly_financials(api_key: str, corp_code: str, year: int, year_m
                         'fs_name': fs_name
                     })
 
-        # ThreadPoolExecutor를 사용하여 병렬 실행
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_task = {
-                executor.submit(get_financial_data, api_key, corp_code, t['year'], t['report_code'], t['fs_code']): t 
-                for t in tasks
-            }
-            
-            for future in concurrent.futures.as_completed(future_to_task):
-                task = future_to_task[future]
-                try:
-                    df = future.result()
-                    if df is not None:
-                        df['보고서명'] = task['report_name']
-                        df['구분'] = task['fs_name']
-                        df['년도'] = task['year']
-                        if 'quarter' in task:
-                            df['분기'] = task['quarter']
-                        all_data.append(df)
-                        print(f"  ✅ {task['year']}년 {task['report_name']} ({task['fs_name']})")
-                    else:
-                        print(f"  ❌ {task['year']}년 {task['report_name']} ({task['fs_name']}) - 데이터 없음")
-                except Exception as exc:
-                    print(f"  💥 {task['year']}년 {task['report_name']} 요청 실패: {exc}")
+        # requests.Session()을 사용하여 연결 재사용
+        with requests.Session() as session:
+            # ThreadPoolExecutor를 사용하여 병렬 실행 (max_workers 증가)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                future_to_task = {
+                    executor.submit(get_financial_data, api_key, corp_code, t['year'], t['report_code'], t['fs_code'], session): t 
+                    for t in tasks
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_task):
+                    task = future_to_task[future]
+                    try:
+                        df = future.result()
+                        if df is not None:
+                            df['보고서명'] = task['report_name']
+                            df['구분'] = task['fs_name']
+                            df['년도'] = task['year']
+                            if 'quarter' in task:
+                                df['분기'] = task['quarter']
+                            all_data.append(df)
+                            print(f"  ✅ {task['year']}년 {task['report_name']} ({task['fs_name']})")
+                        else:
+                            print(f"  ❌ {task['year']}년 {task['report_name']} ({task['fs_name']}) - 데이터 없음")
+                    except Exception as exc:
+                        print(f"  💥 {task['year']}년 {task['report_name']} 요청 실패: {exc}")
 
     if not all_data:
         return pd.DataFrame()
@@ -564,6 +569,8 @@ def home():
 
 @app.get("/search")
 def search(company_name: str, year_month: int = 202509):
+    start_time = time.time()  # 시작 시간 측정
+
     if not MY_API_KEY:
         return {"error": "DART_API_KEY가 설정되지 않았습니다."}
 
@@ -582,5 +589,8 @@ def search(company_name: str, year_month: int = 202509):
     # 3. 테이블 변환 및 출력
     summary_table = format_display_table(df, corp_code, year_month)
     
+    end_time = time.time()  # 종료 시간 측정
+    elapsed_time = end_time - start_time
+    
     # 웹 브라우저에서 보기 좋게 <pre> 태그로 감싸서 반환
-    return HTMLResponse(content=f"<h3>{company_name} 검색 결과</h3><pre>{summary_table}</pre>")
+    return HTMLResponse(content=f"<h3>{company_name} 검색 결과</h3><pre>{summary_table}</pre><p>⏱️ 처리 시간: {elapsed_time:.2f}초</p>")
