@@ -1,0 +1,25 @@
+name: Render Keep Alive
+
+on:
+  schedule:
+    - cron: '*/14 * * * *'  # Runs every 14 minutes
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render URL
+        run: curl -I https://fastapi-hello-knqk.onrender.com
+
+  heartbeat:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keepalive Workflow
+        uses: gautamkrishnar/keepalive-workflow@v1
+        with:
+          committer_username: github-actions[bot]
+          committer_email: github-actions[bot]@users.noreply.github.com
