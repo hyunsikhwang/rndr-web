@@ -399,7 +399,7 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
                                      key=lambda x: (x[0], x[1]), reverse=False)
 
         # 헤더 생성
-        header_parts = ['기간', '매출액', '영업이익', '영업이익률', '단위']
+        header_parts = ['기간', '매출액', '영업이익', '영업이익률']
         
         # 데이터 행 생성
         rows = []
@@ -410,18 +410,19 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
             rev = pivot_df.loc[(year, quarter), '매출액'] if (year, quarter) in pivot_df.index and '매출액' in pivot_df.columns else None
             op = pivot_df.loc[(year, quarter), '영업이익'] if (year, quarter) in pivot_df.index and '영업이익' in pivot_df.columns else None
             
-            # 포맷팅
-            rev_str = "-" if pd.isna(rev) or rev is None else "0" if rev == 0 else f"{int(rev):,}"
-            op_str = "-" if pd.isna(op) or op is None else "0" if op == 0 else f"{int(op):,}"
+            # 포맷팅 (백만원 단위)
+            rev_str = "-" if pd.isna(rev) or rev is None else "0" if rev == 0 else f"{int(rev / 1000000):,}"
+            op_str = "-" if pd.isna(op) or op is None else "0" if op == 0 else f"{int(op / 1000000):,}"
             
             margin = "-"
             if pd.notna(rev) and pd.notna(op) and rev != 0:
                 margin = f"{(op / rev) * 100:.2f}"
                 
-            rows.append([period_name, rev_str, op_str, margin, "원"])
+            rows.append([period_name, rev_str, op_str, margin])
 
 
         return f"""
+    <div style="text-align: right; font-size: 0.9rem; color: #64748b; margin-bottom: 0.5rem;">(단위: 백만원, %)</div>
     <div class="table-container">
         <table>
             <thead>
@@ -492,8 +493,8 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
         sorted_columns = sorted(report_columns.items(), key=lambda x: int(x[1]))
 
         # 헤더 생성
-        header_parts = ['항목'] + [col_name for _, col_name in sorted_columns] + ['단위']
-
+        header_parts = ['항목'] + [col_name for _, col_name in sorted_columns]
+        
         # 데이터 행 생성
         rows = []
         for item in formatted_df.index:
@@ -503,8 +504,13 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
                 val = row.get(report, None)
                 if pd.isna(val) or val is None: row_vals.append("-")
                 elif val == 0: row_vals.append("0")
-                else: row_vals.append(f"{int(str(val).replace(',', '')):,}")
-            row_vals.append("원")
+                else: 
+                     # 백만원 단위 변환
+                     try:
+                        numeric_val = int(str(val).replace(',', ''))
+                        row_vals.append(f"{int(numeric_val / 1000000):,}")
+                     except:
+                        row_vals.append("-")
             rows.append(row_vals)
 
         # 영업이익률 행 추가
@@ -520,10 +526,10 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
                     margin_vals.append("-")
             except KeyError:
                 margin_vals.append("-")
-        margin_vals.append("%")
         rows.append(margin_vals)
 
         return f"""
+        <div style="text-align: right; font-size: 0.9rem; color: #64748b; margin-bottom: 0.5rem;">(단위: 백만원, %)</div>
         <div class="table-container">
             <table>
                 <thead>
@@ -533,7 +539,7 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
                 </thead>
                 <tbody>
                     {"".join(
-                        f"<tr>{''.join(f'<td class=\"number\">{val}</td>' if i > 0 and val != '-' and col_name != '단위' else f'<td>{val}</td>' for i, (col_name, val) in enumerate(zip(header_parts, row_data)))}</tr>"
+                        f"<tr>{''.join(f'<td class=\"number\">{val}</td>' if i > 0 and val != '-' else f'<td>{val}</td>' for i, val in enumerate(row_data))}</tr>"
                         for row_data in rows
                     )}
                 </tbody>
@@ -594,7 +600,7 @@ def render_page(content: str) -> str:
             /* Table */
             .table-container {{ overflow-x: auto; margin-top: 1rem; border-radius: 8px; border: 1px solid var(--border); }}
             table {{ width: 100%; border-collapse: collapse; font-size: 14px; white-space: nowrap; }}
-            th, td {{ padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }}
+            th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }}
             th {{ background-color: #f1f5f9; font-weight: 600; }}
             td.number {{ text-align: right; font-family: "SF Mono", monospace; }}
             /* Loading */
