@@ -32,19 +32,19 @@
 
 ```mermaid
 graph TD
-    User([사용자]) -->|검색 요청 (기업명, 기간)| API[FastAPI 서버]
-    API -->|1. 조회| Cache[(DuckDB)]
-    Cache -- 데이터 있음 (Hit) --> API
-    Cache -- 데이터 없음 (Miss) --> Prober{스마트 탐색기}
-    Prober -->|탐색 요청 (연결/별도 확인)| DART[Open DART API]
-    DART -->|결과 반환| Prober
-    Prober -- '연결' 확인 --> Batch[병렬 수집기]
-    Prober -- '별도' 확인 --> Batch
-    Batch -->|병렬 API 요청| DART
-    DART -->|재무 데이터| Batch
-    Batch -->|2. 데이터 저장 (Upsert)| Cache
-    Batch -->|3. 응답 반환| API
-    API -->|HTML 렌더링| User
+    User(["사용자"]) -->| "검색 요청 (기업명, 기간)" | API["FastAPI 서버"]
+    API -->| "1. 조회" | Cache[("DuckDB")]
+    Cache -- "데이터 있음 (Hit)" --> API
+    Cache -- "데이터 없음 (Miss)" --> Prober{"스마트 탐색기"}
+    Prober -->| "탐색 요청 (연결/별도 확인)" | DART["Open DART API"]
+    DART -->| "결과 반환" | Prober
+    Prober -- "연결 확인" --> Batch["병렬 수집기"]
+    Prober -- "별도 확인" --> Batch
+    Batch -->| "병렬 API 요청" | DART
+    DART -->| "재무 데이터" | Batch
+    Batch -->| "2. 데이터 저장 (Upsert)" | Cache
+    Batch -->| "3. 응답 반환" | API
+    API -->| "HTML 렌더링" | User
 ```
 
 ## 🛠 기술 스택 (Tech Stack)
