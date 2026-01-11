@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 import os
+import concurrent.futures
+import time
 import requests
 import zipfile
 import io
@@ -238,51 +240,70 @@ def collect_quarterly_financials(api_key: str, corp_code: str, year: int, year_m
                 current_quarter = 1
                 current_year += 1
 
-        print(f"\n🔄 [{year_month} 기준] {corp_code} 재무데이터 수집 시작...")
-        print(f"   대상 분기: {quarters_to_collect}")
+        print(f"\n🔄 [{year_month if year_month else year} 기준/년] {corp_code} 재무데이터 수집 시작 (병렬 처리)...")
+        
+        # 병렬 처리를 위한 작업 목록 생성
+        tasks = []
+        
+        if year_month is not None:
+             for target_year, target_quarter in quarters_to_collect:
+                if target_quarter == 1:
+                    report_name = '1분기보고서'
+                    report_code = '11013'
+                elif target_quarter == 2:
+                    report_name = '반기보고서'
+                    report_code = '11012'
+                elif target_quarter == 3:
+                    report_name = '3분기보고서'
+                    report_code = '11014'
+                else:  # target_quarter == 4
+                    report_name = '사업보고서'
+                    report_code = '11011'
 
-        for target_year, target_quarter in quarters_to_collect:
-            if target_quarter == 1:
-                report_name = '1분기보고서'
-                report_code = '11013'
-            elif target_quarter == 2:
-                report_name = '반기보고서'
-                report_code = '11012'
-            elif target_quarter == 3:
-                report_name = '3분기보고서'
-                report_code = '11014'
-            else:  # target_quarter == 4
-                report_name = '사업보고서'
-                report_code = '11011'
+                for fs_name, fs_code in fs_divs:
+                    tasks.append({
+                        'year': target_year,
+                        'report_code': report_code,
+                        'fs_code': fs_code,
+                        'report_name': report_name,
+                        'fs_name': fs_name,
+                        'quarter': target_quarter
+                    })
+        else:
+            # 기존 연도 처리
+            for report_name, report_code in report_types:
+                for fs_name, fs_code in fs_divs:
+                    tasks.append({
+                        'year': year,
+                        'report_code': report_code,
+                        'fs_code': fs_code,
+                        'report_name': report_name,
+                        'fs_name': fs_name
+                    })
 
-            for fs_name, fs_code in fs_divs:
-                df = get_financial_data(api_key, corp_code, target_year, report_code, fs_code)
-
-                if df is not None:
-                    df['보고서명'] = report_name
-                    df['구분'] = fs_name
-                    df['년도'] = target_year
-                    df['분기'] = target_quarter
-                    all_data.append(df)
-                    print(f"  ✅ {target_year}년 {report_name} ({fs_name})")
-                else:
-                    print(f"  ❌ {target_year}년 {report_name} ({fs_name}) - 데이터 없음")
-    else:
-        # 기존 연도 처리
-        print(f"\n🔄 [{year}년] {corp_code} 재무데이터 수집 시작...")
-
-        for report_name, report_code in report_types:
-            for fs_name, fs_code in fs_divs:
-                df = get_financial_data(api_key, corp_code, year, report_code, fs_code)
-
-                if df is not None:
-                    df['보고서명'] = report_name
-                    df['구분'] = fs_name
-                    df['년도'] = year
-                    all_data.append(df)
-                    print(f"  ✅ {report_name} ({fs_name})")
-                else:
-                    print(f"  ❌ {report_name} ({fs_name}) - 데이터 없음")
+        # ThreadPoolExecutor를 사용하여 병렬 실행
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_task = {
+                executor.submit(get_financial_data, api_key, corp_code, t['year'], t['report_code'], t['fs_code']): t 
+                for t in tasks
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    df = future.result()
+                    if df is not None:
+                        df['보고서명'] = task['report_name']
+                        df['구분'] = task['fs_name']
+                        df['년도'] = task['year']
+                        if 'quarter' in task:
+                            df['분기'] = task['quarter']
+                        all_data.append(df)
+                        print(f"  ✅ {task['year']}년 {task['report_name']} ({task['fs_name']})")
+                    else:
+                        print(f"  ❌ {task['year']}년 {task['report_name']} ({task['fs_name']}) - 데이터 없음")
+                except Exception as exc:
+                    print(f"  💥 {task['year']}년 {task['report_name']} 요청 실패: {exc}")
 
     if not all_data:
         return pd.DataFrame()
