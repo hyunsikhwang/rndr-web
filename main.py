@@ -364,6 +364,29 @@ def format_display_table(df: pd.DataFrame, corp_code: str, year_month: int = Non
         unique_years_quarters = sorted(df[['년도', '분기']].drop_duplicates().values.tolist(),
                                      key=lambda x: (x[0], x[1]), reverse=False)
 
+        # 헤더 생성
+        header_parts = ['기간', '매출액', '영업이익', '영업이익률', '단위']
+        
+        # 데이터 행 생성
+        rows = []
+        for year, quarter in unique_years_quarters:
+            period_name = f"{year}년 {quarter}분기"
+            
+            # 값 추출
+            rev = pivot_df.loc[(year, quarter), '매출액'] if (year, quarter) in pivot_df.index and '매출액' in pivot_df.columns else None
+            op = pivot_df.loc[(year, quarter), '영업이익'] if (year, quarter) in pivot_df.index and '영업이익' in pivot_df.columns else None
+            
+            # 포맷팅
+            rev_str = "-" if pd.isna(rev) or rev is None else "0" if rev == 0 else f"{int(rev):,}"
+            op_str = "-" if pd.isna(op) or op is None else "0" if op == 0 else f"{int(op):,}"
+            
+            margin = "-"
+            if pd.notna(rev) and pd.notna(op) and rev != 0:
+                margin = f"{(op / rev) * 100:.2f}"
+                
+            rows.append([period_name, rev_str, op_str, margin, "원"])
+
+
         return f"""
     <div class="table-container">
         <table>
